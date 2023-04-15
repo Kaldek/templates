@@ -16,13 +16,65 @@ chip: WR4
 Requires removal of the Tuya WR4 (Realtek) module and installation of an ESP controller (e.g. ESP12/ESP8266).  As this is an MCU-controlled device it only requires use of VCC, GND, TXD, RXD and EN pins on the ESP, soldered to the locations showing the image.
 https://imgur.com/a/TtjWidJ
 
-Note that the image refers to pin IDs for the WR4 module such as ""A18"".  You can ignore this and just focus on the ""TXD"" and ""RXD"" as referring to TX/RX respectively.
+Note that the image of the module refers to pin IDs for the WR4 module such as ""A18"".  You can ignore this and just focus on the ""TXD"" and ""RXD"" as referring to TX/RX respectively.
 
-Use the following console commands to map to the correct Tasmota Function IDs:
-```Backlog TuyaMCU 11,1; TuyaMCU 64,3; TuyaEnumlist 4,5; TuyaMCU 97,4 TuyaMCU 12,9; TuyaMCU 22,10```
+Use the following console commands to map to the correct Tasmota Function IDs.  The remaining functions must be configured within MQTT in Home Assistant:
+```Backlog SetOption66 1; SetOption137 1; TuyaMCU 11,1; TuyaMCU 12,9```
 
 If your Backlog command does not execute as expected, enter each command separately, allowing time for Tasomota to reboot after each command execution.
 
 WARNING:  Do not use the command ```TuyaMCU 21,10``` as this crashes the MCU on the main controller board and the light/fan will cease to function completely.  The command ```TuyaMCU 21,0``` will remove the issue.   Use of the command ```TuyaMCU 22,10``` allows the dimmer to work but you will be unable to set the Dimmer Range which is 2-100, however the default Tasmota values of 10-100 are fine.   The Dimmer is increased in steps of 2 (e,g: 2,4,6,8,10,12,etc) for a total of 49 possible dimmer values.
 
-The LED Colour Temperature (CCT) values for the three colour temperatures are 0, 50, and 100. 
+Home Assistant configuration in YAML.  This detail is needed to reliably control the fan and light:
+
+```yaml
+mqtt:
+  fan:
+    - unique_id: "Ceiling Fan"
+      name: "Ceiling Fan"
+      state_topic: "tele/TOPIC/RESULT"
+      state_value_template: "{{ 'ON' if '1' in value_json.TuyaReceived and value_json.TuyaReceived['1'].DpIdData == '01' else 'OFF' if '1' in value_json.TuyaReceived and value_json.TuyaReceived['1'].DpIdData == '00' }}"
+      command_topic: "cmnd/TOPIC/POWER1"
+      payload_on: 'ON'
+      payload_off: 'OFF'
+      percentage_command_topic: "cmnd/TOPIC/TuyaSend4"
+      percentage_command_template: "{{ {1: '3,0', 2: '3,1', 3: '3,2', 4: '3,3', 5: '3,4', 6: '3,5'}[value] | default('1') }}"
+      percentage_state_topic: "tele/TOPIC/RESULT"
+      percentage_value_template: "{{ (value_json.TuyaReceived['3'].DpIdData | int) + 1 if '3' in value_json.TuyaReceived }}"
+      speed_range_min: 1
+      speed_range_max: 6
+      preset_modes:
+        - "Summer"
+        - "Winter"
+      preset_mode_command_topic: "cmnd/TOPIC/TuyaSend4"
+      preset_mode_command_template: >
+        {% if value == 'Winter' %}4,1
+        {% elif value == 'Summer' %}4,0
+        {% endif %}   
+      preset_mode_state_topic: "tele/TOPIC/RESULT"
+      preset_mode_value_template: >
+        {%- if '4' in value_json.TuyaReceived %}
+          {%- if value_json.TuyaReceived['4'].DpIdData | int == 1 %}Winter
+          {%- elif value_json.TuyaReceived['4'].DpIdData | int == 0 %}Summer
+          {%- endif %}
+        {%- endif %}
+ 
+  light:
+    - unique_id: "Fan Light"
+      name: "Fan Light"
+      state_topic: "stat/TOPIC/POWER2"
+      command_topic: "cmnd/TOPIC/POWER2"
+      payload_on: 'ON'
+      payload_off: 'OFF'
+      brightness_command_topic: "cmnd/TOPIC/TuyaSend2"
+      brightness_command_template: "{{ '10,' ~ (((value | int) // 2) * 2) }}"
+      brightness_state_topic: "tele/TOPIC/RESULT"
+      brightness_scale: 100
+      brightness_value_template: "{{ (value_json.TuyaReceived['10'].DpIdData | int(base=16)) if '10' in value_json.TuyaReceived else None }}"
+      color_temp_command_topic: "cmnd/TOPIC/TuyaSend2"
+      color_temp_command_template: "{{ '11,' ~ ((value - 154) * 100 / (370 - 154)) | round }}"
+      color_temp_state_topic: "tele/TOPIC/RESULT"
+      color_temp_value_template: "{{ (154 + (value_json.TuyaReceived['11'].DpIdData | int(base=16)) * (370 - 154) / 100) | round if '11' in value_json.TuyaReceived else None }}"
+      min_mireds: 154
+      max_mireds: 370```
+
